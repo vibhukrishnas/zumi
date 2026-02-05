@@ -1,0 +1,31 @@
+exports.updateAvailability = async (req, res) => {
+    try {
+        const providerId = req.user.id; // Assuming provider is user for now
+        const { schedule } = req.body; // Array of { day: 'Monday', start: '09:00', end: '17:00', active: true }
+
+        // Clear existing (Simple)
+        await pool.execute('DELETE FROM availability WHERE provider_id = ?', [providerId]);
+        
+        for (const slot of schedule) {
+            if (slot.active) {
+                await pool.execute(
+                    'INSERT INTO availability (provider_id, day_of_week, start_time, end_time) VALUES (?, ?, ?, ?)',
+                    [providerId, slot.day, slot.start, slot.end]
+                );
+            }
+        }
+        res.json({ success: true, message: 'Availability updated' });
+    } catch (error) {
+        res.status(500).json({ message: 'Error updating availability' });
+    }
+};
+
+exports.getAvailability = async (req, res) => {
+    try {
+        const providerId = req.user.id;
+        const [rows] = await pool.execute('SELECT day_of_week, start_time, end_time FROM availability WHERE provider_id = ?', [providerId]);
+        res.json({ success: true, data: rows });
+    } catch (e) {
+        res.status(500).json({ message: 'Error fetching availability' });
+    }
+};
