@@ -8,7 +8,11 @@ exports.verifyToken = (req, res, next) => {
 
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.user = decoded;
+        // Normalize user object: JWT stores 'userId' but controllers expect 'id'
+        req.user = {
+            id: decoded.userId || decoded.id,
+            email: decoded.email
+        };
         next();
     } catch (error) {
         res.status(403).json({ message: 'Invalid token.' });
@@ -23,7 +27,11 @@ exports.optionalAuth = (req, res, next) => {
     if (token) {
         try {
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            req.user = decoded;
+            // Normalize user object: JWT stores 'userId' but controllers expect 'id'
+            req.user = {
+                id: decoded.userId || decoded.id,
+                email: decoded.email
+            };
         } catch (error) {
             // Token invalid, continue without user
             req.user = null;

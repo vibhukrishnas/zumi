@@ -38,8 +38,12 @@ api.interceptors.response.use(
     async (error) => {
         const originalRequest = error.config;
 
-        // Handle 401/403 - token expired or invalid
-        if ((error.response?.status === 401 || error.response?.status === 403) && !originalRequest._retry) {
+        // Handle 401 - token expired or invalid
+        // Don't auto-logout on 403 if it's a subscription/premium gating response
+        const is401 = error.response?.status === 401;
+        const is403Auth = error.response?.status === 403 && !error.response?.data?.requiresUpgrade;
+        
+        if ((is401 || is403Auth) && !originalRequest._retry) {
             originalRequest._retry = true;
             
             // Clear auth data

@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFonts, Outfit_400Regular, Outfit_500Medium, Outfit_600SemiBold, Outfit_700Bold } from '@expo-google-fonts/outfit';
 import * as SplashScreen from 'expo-splash-screen';
+import ErrorBoundary from './components/ErrorBoundary';
 
 import LoginScreen from './screens/LoginScreen';
 import RegisterScreen from './screens/RegisterScreen';
@@ -26,6 +27,7 @@ import DetailScreen from './screens/DetailScreen';
 import BookingScreen from './screens/BookingScreen';
 import MyPetsScreen from './screens/MyPetsScreen';
 import AddPetScreen from './screens/AddPetScreen';
+import PetDetailScreen from './screens/PetDetailScreen';
 import ChangePasswordScreen from './screens/ChangePasswordScreen';
 import PaymentGatewayScreen from './screens/PaymentGatewayScreen';
 import ProviderDashboardScreen from './screens/ProviderDashboardScreen';
@@ -212,6 +214,11 @@ function AppNav() {
               options={{ headerShown: false }}
             />
             <Stack.Screen
+              name="PetDetail"
+              component={PetDetailScreen}
+              options={{ headerShown: false }}
+            />
+            <Stack.Screen
               name="ChangePassword"
               component={ChangePasswordScreen}
               options={{ headerShown: false }}
@@ -254,14 +261,19 @@ export default function App() {
   if (!fontsLoaded) return null;
 
   return (
-    <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
-      <AuthProvider>
-        <StripeProvider publishableKey="pk_test_51SxUwDFF8UagZ97u5A03Ks7TdBTbQOw4YJAUrj2brtfXxOx4uwPrPBN5YQNzAN1PrXhX6yg8qo1KVfi2Vuc6ZcQY00ewLTK3Ef">
-          <PaperProvider theme={theme}>
-            <AppNav />
-          </PaperProvider>
-        </StripeProvider>
-      </AuthProvider>
-    </View>
+    <ErrorBoundary 
+      fallbackMessage="The app encountered an unexpected error. Please restart the app."
+      showReportButton={true}
+    >
+      <View style={{ flex: 1 }} onLayout={onLayoutRootView}>
+        <AuthProvider>
+          <StripeProvider publishableKey="pk_test_51SxUwDFF8UagZ97u5A03Ks7TdBTbQOw4YJAUrj2brtfXxOx4uwPrPBN5YQNzAN1PrXhX6yg8qo1KVfi2Vuc6ZcQY00ewLTK3Ef">
+            <PaperProvider theme={theme}>
+              <AppNav />
+            </PaperProvider>
+          </StripeProvider>
+        </AuthProvider>
+      </View>
+    </ErrorBoundary>
   );
 }

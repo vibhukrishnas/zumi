@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useContext } from 'react';
+import React, { useState, useRef, useEffect, useContext, useCallback } from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity, Animated, RefreshControl } from 'react-native';
 import { Text, ActivityIndicator } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import { haptic } from '../utils/haptics';
 import api from '../services/api';
 import ZumiLogo from '../components/ZumiLogo';
 import { AuthContext } from '../context/AuthContext';
+import { useFocusEffect } from '@react-navigation/native';
 
 function TabButton({ title, isActive, onPress }) {
     return (
@@ -85,31 +86,43 @@ export default function ScheduleScreen({ navigation }) {
 
             const now = new Date();
             const upcoming = allBookings
-                .filter(b => new Date(b.booking_date) >= now && b.status !== 'cancelled')
-                .map(b => ({
-                    id: b.id,
-                    title: b.service_title || b.event_title || 'Booking',
-                    time: new Date(b.booking_date).toLocaleDateString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }),
-                    type: b.item_type === 'service' ? 'walker' : 'vet',
-                    status: b.status,
-                }));
+                .filter(b => {
+                    const bDate = b.booking_date ? new Date(b.booking_date) : new Date(b.created_at);
+                    return bDate >= now && b.status !== 'cancelled';
+                })
+                .map(b => {
+                    const bDate = b.booking_date ? new Date(b.booking_date) : new Date(b.created_at);
+                    return {
+                        id: b.id,
+                        title: b.service_title || b.event_title || 'Booking',
+                        time: bDate.toLocaleDateString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }),
+                        type: b.item_type === 'service' ? 'walker' : 'vet',
+                        status: b.status,
+                    };
+                });
 
             const history = allBookings
-                .filter(b => new Date(b.booking_date) < now || b.status === 'completed')
-                .map(b => ({
-                    id: b.id,
-                    title: b.service_title || b.event_title || 'Booking',
-                    time: new Date(b.booking_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-                    type: b.item_type === 'service' ? 'grooming' : 'vet',
-                    status: b.status,
-                }));
+                .filter(b => {
+                    const bDate = b.booking_date ? new Date(b.booking_date) : new Date(b.created_at);
+                    return bDate < now || b.status === 'completed' || b.status === 'cancelled';
+                })
+                .map(b => {
+                    const bDate = b.booking_date ? new Date(b.booking_date) : new Date(b.created_at);
+                    return {
+                        id: b.id,
+                        title: b.service_title || b.event_title || 'Booking',
+                        time: bDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                        type: b.item_type === 'service' ? 'grooming' : 'vet',
+                        status: b.status,
+                    };
+                });
 
             const requests = allBookings
-                .filter(b => b.status === 'pending')
+                .filter(b => b.status === 'pending_payment' || b.status === 'initiated')
                 .map(b => ({
                     id: b.id,
                     title: b.service_title || b.event_title || 'Pending Request',
-                    time: 'Pending approval',
+                    time: 'Awaiting payment',
                     type: 'walker',
                     status: b.status,
                 }));
@@ -117,27 +130,20 @@ export default function ScheduleScreen({ navigation }) {
             setBookings({ upcoming, history, requests });
         } catch (error) {
             console.log('Error fetching bookings:', error);
-            // Set sample data on error
-            setBookings({
-                upcoming: [
-                    { id: 1, title: 'Dog Walker - Tom', time: 'Tomorrow, 10:00 AM', type: 'walker' },
-                    { id: 2, title: 'Dog Walker - Tom', time: '10:00 AM', type: 'walker' },
-                    { id: 3, title: 'Vet Check-up', time: 'Friday, 2 PM', type: 'vet' },
-                ],
-                history: [
-                    { id: 4, title: 'Grooming Session', time: 'Last Week', type: 'grooming' },
-                ],
-                requests: [],
-            });
+            // Show empty state on error - no fake data
+            setBookings({ upcoming: [], history: [], requests: [] });
         } finally {
             setLoading(false);
             setRefreshing(false);
         }
     };
 
-    useEffect(() => {
-        fetchBookings();
-    }, []);
+    // Refresh bookings when screen is focused
+    useFocusEffect(
+        useCallback(() => {
+            fetchBookings();
+        }, [])
+    );
 
     const onRefresh = () => {
         haptic.light();

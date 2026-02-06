@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useContext } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, Animated, Image, Dimensions } from 'react-native';
+import React, { useState, useRef, useEffect, useContext, useCallback } from 'react';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Animated, Image, Dimensions, RefreshControl } from 'react-native';
 import { Text, ActivityIndicator } from 'react-native-paper';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,6 +8,7 @@ import { haptic } from '../utils/haptics';
 import ZumiLogo from '../components/ZumiLogo';
 import api from '../services/api';
 import { AuthContext } from '../context/AuthContext';
+import { useFocusEffect } from '@react-navigation/native';
 
 function TabButton({ title, isActive, onPress }) {
     return (
@@ -110,11 +111,17 @@ export default function ServiceBookingScreen({ navigation }) {
 
                 const now = new Date();
                 const upcoming = allBookings
-                    .filter(b => b.status === 'pending' || (new Date(b.booking_date) >= now && b.status !== 'cancelled'))
+                    .filter(b => {
+                        const bDate = b.booking_date ? new Date(b.booking_date) : new Date(b.created_at);
+                        return b.status === 'pending_payment' || b.status === 'initiated' || (bDate >= now && b.status === 'confirmed');
+                    })
                     .map(formatBooking);
 
                 const history = allBookings
-                    .filter(b => new Date(b.booking_date) < now || b.status === 'completed' || b.status === 'cancelled')
+                    .filter(b => {
+                        const bDate = b.booking_date ? new Date(b.booking_date) : new Date(b.created_at);
+                        return bDate < now || b.status === 'completed' || b.status === 'cancelled';
+                    })
                     .map(formatBooking);
 
                 setBookings({ requests: upcoming, history: history });
@@ -126,17 +133,35 @@ export default function ServiceBookingScreen({ navigation }) {
         }
     };
 
-    const formatBooking = (b) => ({
-        id: b.id,
-        title: b.service_title || b.event_title || 'Booking',
-        time: new Date(b.booking_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
-        type: b.item_type,
-        status: b.status
-    });
+    const formatBooking = (b) => {
+        const bDate = b.booking_date ? new Date(b.booking_date) : new Date(b.created_at);
+        return {
+            id: b.id,
+            title: b.service_title || b.event_title || 'Booking',
+            time: bDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
+            type: b.item_type,
+            status: b.status
+        };
+    };
 
+    // Refresh data when tab changes
     useEffect(() => {
         fetchData();
     }, [activeTab]);
+
+    // Re-fetch when screen comes into focus (after booking, payment, etc.)
+    useFocusEffect(
+        useCallback(() => {
+            fetchData();
+        }, [activeTab])
+    );
+
+    const [refreshing, setRefreshing] = useState(false);
+    const onRefresh = () => {
+        haptic.light();
+        setRefreshing(true);
+        fetchData().finally(() => setRefreshing(false));
+    };
 
     return (
         <View style={styles.container}>
@@ -154,8 +179,8 @@ export default function ServiceBookingScreen({ navigation }) {
             </View>
 
             {/* Content */}
-            <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-                {loading ? (
+            <ScrollView style={styles.content} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />}>
+                {loading && !refreshing ? (
                     <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
                 ) : activeTab === 'book' ? (
                     <View style={styles.servicesGrid}>

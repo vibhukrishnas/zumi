@@ -86,35 +86,27 @@ export default function HomeScreen({ navigation }) {
 
             // Process bookings for display
             const upcomingBookings = (bookingsRes.data.data || [])
-                .filter(b => b.status === 'confirmed' || b.status === 'pending')
+                .filter(b => b.status === 'confirmed' || b.status === 'pending_payment' || b.status === 'initiated')
                 .slice(0, 3)
-                .map(b => ({
-                    id: b.id,
-                    title: b.service_title || b.event_title || 'Booking',
-                    time: new Date(b.booking_date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
-                    icon: b.item_type === 'service' ? 'paw-outline' : 'calendar-outline',
-                    type: b.item_type,
-                }));
+                .map(b => {
+                    const bDate = b.booking_date ? new Date(b.booking_date) : new Date(b.created_at);
+                    return {
+                        id: b.id,
+                        title: b.service_title || b.event_title || 'Booking',
+                        time: bDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
+                        icon: b.item_type === 'service' ? 'paw-outline' : 'calendar-outline',
+                        type: b.item_type,
+                    };
+                });
 
-            // If no real bookings, show sample data
-            if (upcomingBookings.length === 0) {
-                setBookings([
-                    { id: 1, title: 'Dog Walker - Tom', time: 'Tomorrow, 10 AM', icon: 'walk-outline' },
-                    { id: 2, title: 'Vet Check-up', time: 'Friday, 2 PM', icon: 'medical-outline' },
-                ]);
-            } else {
-                setBookings(upcomingBookings);
-            }
+            // Show actual bookings or empty state
+            setBookings(upcomingBookings);
 
             setServices(servicesRes.data.data || []);
             setEvents(eventsRes.data.data || []);
         } catch (error) {
             console.log('Error fetching data:', error);
-            // Set default bookings on error
-            setBookings([
-                { id: 1, title: 'Dog Walker - Tom', time: 'Tomorrow, 10 AM', icon: 'walk-outline' },
-                { id: 2, title: 'Vet Check-up', time: 'Friday, 2 PM', icon: 'medical-outline' },
-            ]);
+            setBookings([]);
         } finally {
             setLoading(false);
             setRefreshing(false);

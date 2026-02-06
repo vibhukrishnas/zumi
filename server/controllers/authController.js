@@ -6,46 +6,136 @@ exports.register = async (req, res) => {
     try {
         const { email, password, fullName, phone } = req.body;
 
-        // Validation
+        // Input Validation
         if (!email || !password || !fullName) {
-            return res.status(400).json({ success: false, message: 'Missing required fields' });
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Email, password, and full name are required' 
+            });
+        }
+
+        // Email format validation
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid email format' 
+            });
+        }
+
+        // Password strength validation
+        if (password.length < 8) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Password must be at least 8 characters long' 
+            });
+        }
+
+        if (password.length > 128) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Password is too long' 
+            });
+        }
+
+        // Name length validation
+        if (fullName.length < 2 || fullName.length > 100) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Full name must be between 2 and 100 characters' 
+            });
+        }
+
+        // Phone validation (if provided)
+        if (phone && phone.length > 20) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Phone number is too long' 
+            });
         }
 
         // Check if user exists
-        const [existing] = await pool.execute('SELECT id FROM users WHERE email = ?', [email]);
+        const [existing] = await pool.execute(
+            'SELECT id FROM users WHERE email = ?', 
+            [email.toLowerCase().trim()]
+        );
+        
         if (existing.length > 0) {
-            return res.status(409).json({ success: false, message: 'Email already registered' });
+            return res.status(409).json({ 
+                success: false, 
+                message: 'Email already registered' 
+            });
         }
 
         // Hash password
         const passwordHash = await bcrypt.hash(password, 10);
 
-        // Insert User
-        const [result] = await pool.execute(
-            'INSERT INTO users (email, password_hash, full_name, phone) VALUES (?, ?, ?, ?)',
-            [email, passwordHash, fullName, phone]
-        );
-        const userId = result.insertId;
+        // Start transaction for user creation and subscription
+        const connection = await pool.getConnection();
+        try {
+            await connection.beginTransaction();
 
-        // Create default Free Subscription
-        const [subResult] = await pool.execute(
-            'INSERT INTO subscriptions (user_id, tier, status, start_date, end_date) VALUES (?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 1 YEAR))',
-            [userId, 'free', 'active']
-        );
+            // Insert User
+            const [result] = await connection.execute(
+                'INSERT INTO users (email, password_hash, full_name, phone) VALUES (?, ?, ?, ?)',
+                [email.toLowerCase().trim(), passwordHash, fullName.trim(), phone?.trim() || null]
+            );
+            const userId = result.insertId;
 
-        // Generate Token
-        const token = jwt.sign({ userId, email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+            // Create default Free Subscription
+            await connection.execute(
+                'INSERT INTO subscriptions (user_id, tier, status, start_date, end_date) VALUES (?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 1 YEAR))',
+                [userId, 'free', 'active']
+            );
 
-        res.status(201).json({
-            success: true,
-            data: { userId, email, token }
-        });
+            await connection.commit();
+            connection.release();
+
+            // Generate Token
+            const token = jwt.sign(
+                { userId, email: email.toLowerCase().trim() }, 
+                process.env.JWT_SECRET, 
+                { expiresIn: '7d' }
+            );
+
+            res.status(201).json({
+                success: true,
+                data: { userId, email: email.toLowerCase().trim(), token }
+            });
+        } catch (dbError) {
+            await connection.rollback();
+            connection.release();
+            throw dbError;
+        }
 
     } catch (error) {
-        console.error('Register Error Full:', error);
-        console.error('Register Error Message:', error.message);
-        console.error('Register Error SQL:', error.sql);
-        res.status(500).json({ success: false, message: 'Server error during registration: ' + error.message });
+        console.error('Register Error:', {
+            message: error.message,
+            code: error.code,
+            errno: error.errno,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+
+        // Handle specific database errors
+        if (error.code === 'ER_DUP_ENTRY') {
+            return res.status(409).json({ 
+                success: false, 
+                message: 'Email already registered' 
+            });
+        }
+
+        if (error.code === 'ER_DATA_TOO_LONG') {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'One or more fields exceed maximum length' 
+            });
+        }
+
+        res.status(500).json({ 
+            success: false, 
+            message: 'Unable to create account. Please try again later.',
+            ...(process.env.NODE_ENV === 'development' && { debug: error.message })
+        });
     }
 };
 
@@ -53,21 +143,45 @@ exports.login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
+        // Input validation
         if (!email || !password) {
-            return res.status(400).json({ success: false, message: 'Missing email or password' });
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Email and password are required' 
+            });
         }
 
-        // Find User
-        const [users] = await pool.execute('SELECT * FROM users WHERE email = ?', [email]);
+        // Basic email format check
+        if (!email.includes('@')) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid email format' 
+            });
+        }
+
+        // Find User (use lowercase for case-insensitive lookup)
+        const [users] = await pool.execute(
+            'SELECT * FROM users WHERE LOWER(email) = LOWER(?)', 
+            [email.trim()]
+        );
+        
         if (users.length === 0) {
-            return res.status(401).json({ success: false, message: 'Invalid credentials' });
+            // Don't reveal that email doesn't exist (security)
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Invalid email or password' 
+            });
         }
         const user = users[0];
 
         // Verify Password
         const validPassword = await bcrypt.compare(password, user.password_hash);
         if (!validPassword) {
-            return res.status(401).json({ success: false, message: 'Invalid credentials' });
+            // Same generic message for security
+            return res.status(401).json({ 
+                success: false, 
+                message: 'Invalid email or password' 
+            });
         }
 
         // Get Subscription Status
@@ -78,7 +192,11 @@ exports.login = async (req, res) => {
         const subscription = subs[0] || { tier: 'free', status: 'none' };
 
         // Generate Token
-        const token = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign(
+            { userId: user.id, email: user.email }, 
+            process.env.JWT_SECRET, 
+            { expiresIn: '7d' }
+        );
 
         res.json({
             success: true,
@@ -92,8 +210,18 @@ exports.login = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Login Error:', error);
-        res.status(500).json({ success: false, message: 'Server error during login' });
+        console.error('Login Error:', {
+            message: error.message,
+            code: error.code,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+
+        // Don't expose internal errors
+        res.status(500).json({ 
+            success: false, 
+            message: 'Unable to process login. Please try again later.',
+            ...(process.env.NODE_ENV === 'development' && { debug: error.message })
+        });
     }
 };
 

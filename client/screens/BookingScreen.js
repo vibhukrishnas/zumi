@@ -20,15 +20,17 @@ function FadeInView({ children, delay = 0, style }) {
 export default function BookingScreen({ route, navigation }) {
     const { id, title, type, price } = route.params;
     const [coupon, setCoupon] = useState('');
-    const [loading, setLoading] = useState(true); // Initial load is true for auto-calc
-    const [calcLoading, setCalcLoading] = useState(false); // For manual coupon apply
+    const [loading, setLoading] = useState(true);
+    const [calcLoading, setCalcLoading] = useState(false);
     const [bookingDetails, setBookingDetails] = useState(null);
     const [availableCoupons, setAvailableCoupons] = useState([]);
     const [showCoupons, setShowCoupons] = useState(false);
+    const [error, setError] = useState(null);
+    const [retryCount, setRetryCount] = useState(0);
     const { signOut } = React.useContext(require('../context/AuthContext').AuthContext);
 
     useEffect(() => {
-        calculatePrice('');
+        calculatePrice('', true);
         fetchAvailableCoupons();
     }, []);
 
@@ -47,55 +49,126 @@ export default function BookingScreen({ route, navigation }) {
         }
     };
 
-    const calculatePrice = async (code = '') => {
+    const calculatePrice = async (code = '', isInitialLoad = false) => {
         if (code) setCalcLoading(true);
+        setError(null);
 
         try {
-            const response = await api.post('/bookings/initiate', {
+            // Use calculate endpoint for price preview (no booking created yet)
+            const response = await api.post('/bookings/calculate', {
                 itemId: id,
                 itemType: type || 'event',
                 couponCode: code
             });
-            setBookingDetails(response.data.data);
-            if (code) haptic.success();
-        } catch (error) {
-            console.log('Booking calculation error:', error);
             
-            // If there's an error (including auth errors), use fallback pricing
+            if (response.data.success) {
+                setBookingDetails(response.data.data);
+                if (code) {
+                    haptic.success();
+                }
+                setRetryCount(0);
+            }
+        } catch (error) {
+            console.error('Booking calculation error:', error);
+            
+            // Handle subscription gating
+            if (error.response?.status === 403 && error.response?.data?.requiresUpgrade) {
+                setLoading(false);
+                setCalcLoading(false);
+                Alert.alert(
+                    "Premium Required 💎",
+                    error.response.data.message || "This service requires a Premium subscription.",
+                    [
+                        { text: "Cancel", style: "cancel", onPress: () => navigation.goBack() },
+                        { 
+                            text: "Upgrade Now", 
+                            onPress: () => navigation.navigate('Subscription') 
+                        }
+                    ]
+                );
+                return;
+            }
+            
+            // Handle network errors with retry
+            if (!error.response && retryCount < 2) {
+                setError('Connection issue. Retrying...');
+                setRetryCount(prev => prev + 1);
+                setTimeout(() => calculatePrice(code, isInitialLoad), 2000);
+                return;
+            }
+            
             if (code) {
                 haptic.error();
-                Alert.alert("Invalid Coupon", "That code didn't work. Try another?");
+                const errorMsg = error.response?.data?.message || "Invalid coupon code";
+                Alert.alert("Invalid Coupon", errorMsg);
                 setCoupon('');
             }
             
-            // Set fallback booking details with base price
-            setBookingDetails({
-                bookingId: null,
-                originalPrice: price,
-                discounts: {
-                    provider: 0,
-                    subscription: 0,
-                    coupon: 0
-                },
-                finalPrice: price
-            });
+            // Use fallback pricing only if this is initial load
+            if (isInitialLoad) {
+                setError('Could not connect to server. Using base pricing.');
+                setBookingDetails({
+                    bookingId: null,
+                    originalPrice: price,
+                    discounts: {
+                        provider: 0,
+                        subscription: 0,
+                        coupon: 0
+                    },
+                    finalPrice: price,
+                    status: 'offline'
+                });
+            } else {
+                setError('Unable to calculate price. Please try again.');
+            }
         } finally {
             setLoading(false);
             setCalcLoading(false);
         }
     };
 
-    const confirmPayment = () => {
+    const confirmPayment = async () => {
         haptic.light();
 
-        // Fallback to base price if API failed (Guest/Demo Mode)
-        const finalAmount = bookingDetails?.finalPrice || price;
-        const currentBookingId = bookingDetails?.bookingId || null;
+        // Validate booking details
+        if (!bookingDetails) {
+            Alert.alert("Error", "Unable to process booking. Please refresh and try again.");
+            return;
+        }
 
-        navigation.navigate('PaymentGateway', {
-            amount: finalAmount,
-            bookingId: currentBookingId
-        });
+        // Warn if using fallback pricing
+        if (bookingDetails.status === 'offline') {
+            Alert.alert(
+                "Offline Mode",
+                "Connection to server lost. Please check your internet and try again.",
+                [{ text: "OK" }]
+            );
+            return;
+        }
+
+        // Create the actual booking now (at payment time)
+        try {
+            setLoading(true);
+            const response = await api.post('/bookings/initiate', {
+                itemId: id,
+                itemType: type || 'event',
+                couponCode: coupon || undefined
+            });
+
+            if (response.data.success) {
+                const { bookingId, finalPrice } = response.data.data;
+                navigation.navigate('PaymentGateway', {
+                    amount: finalPrice,
+                    bookingId: bookingId
+                });
+            }
+        } catch (error) {
+            console.error('Booking creation error:', error);
+            const errorMsg = error.response?.data?.message || 'Failed to create booking. Please try again.';
+            Alert.alert('Booking Error', errorMsg);
+        } finally {
+            setLoading(false);
+        }
     };
 
     const renderBreakdownItem = (label, value, isDiscount = false, isTotal = false) => (
