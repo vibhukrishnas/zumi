@@ -150,6 +150,17 @@ function AppNav() {
               }}
             />
             <Stack.Screen
+              name="Detail"
+              component={DetailScreen}
+              options={{
+                headerShown: true,
+                headerTitle: 'Details',
+                headerStyle: { backgroundColor: colors.primary, elevation: 0, shadowOpacity: 0 },
+                headerTintColor: '#fff',
+                headerTitleStyle: { fontFamily: 'Outfit_600SemiBold' },
+              }}
+            />
+            <Stack.Screen
               name="Booking"
               component={BookingScreen}
               options={{

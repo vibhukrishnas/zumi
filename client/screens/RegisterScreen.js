@@ -45,15 +45,16 @@ export default function RegisterScreen({ navigation }) {
         }
         setLoading(true);
         setError('');
-        try {
-            await signUp(fullName, email, password);
+        
+        const result = await signUp(email, password, fullName, '');
+        
+        if (result.success) {
             haptic.success();
-        } catch (err) {
-            setError(err.response?.data?.message || 'Registration failed');
+        } else {
+            setError(result.error);
             haptic.error();
-        } finally {
-            setLoading(false);
         }
+        setLoading(false);
     };
 
     return (

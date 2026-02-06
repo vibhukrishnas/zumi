@@ -143,6 +143,39 @@ exports.updateProfile = async (req, res) => {
     }
 };
 
+exports.getProfile = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        const [users] = await pool.execute(
+            'SELECT id, full_name, email, phone, profile_image, notifications_enabled FROM users WHERE id = ?',
+            [userId]
+        );
+
+        if (users.length === 0) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const user = users[0];
+        const profileData = {
+            id: user.id,
+            fullName: user.full_name,
+            email: user.email,
+            phone: user.phone || '',
+            profileImage: user.profile_image,
+            notificationsEnabled: !!user.notifications_enabled
+        };
+
+        res.json({
+            success: true,
+            data: profileData
+        });
+    } catch (error) {
+        console.error('Get profile error:', error);
+        res.status(500).json({ success: false, message: 'Error fetching profile' });
+    }
+};
+
 exports.changePassword = async (req, res) => {
     try {
         const userId = req.user.id;

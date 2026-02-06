@@ -8,15 +8,31 @@ import { colors } from '../theme';
 import { haptic } from '../utils/haptics';
 import ZumiLogo from '../components/ZumiLogo';
 
-export default function LoginScreen({ navigation }) {
+export default function LoginScreen({ navigation, route }) {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
-    const { signIn } = useContext(AuthContext);
+    const { signIn, authError, clearError } = useContext(AuthContext);
 
     const fadeAnim = useRef(new Animated.Value(0)).current;
     const slideAnim = useRef(new Animated.Value(30)).current;
+
+    // Clear any auth errors when component mounts or when navigating here
+    useEffect(() => {
+        if (authError) {
+            clearError();
+        }
+    }, []);
+
+    // Check if there's a session expired message passed via navigation
+    useEffect(() => {
+        if (route?.params?.sessionExpired) {
+            setError('Session expired. Please log in again.');
+            // Clear the param so it doesn't show again
+            navigation.setParams({ sessionExpired: undefined });
+        }
+    }, [route?.params?.sessionExpired]);
 
     useEffect(() => {
         Animated.parallel([
@@ -33,15 +49,16 @@ export default function LoginScreen({ navigation }) {
         }
         setLoading(true);
         setError('');
-        try {
-            await signIn(email, password);
+        
+        const result = await signIn(email, password);
+        
+        if (result.success) {
             haptic.success();
-        } catch (err) {
-            setError(err.response?.data?.message || 'Login failed');
+        } else {
+            setError(result.error);
             haptic.error();
-        } finally {
-            setLoading(false);
         }
+        setLoading(false);
     };
 
     return (

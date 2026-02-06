@@ -200,9 +200,12 @@ export default function HomeScreen({ navigation }) {
                             booking={booking}
                             onPress={() => {
                                 haptic.light();
-                                if (booking.type === 'service') {
-                                    navigation.navigate('ServiceDetail', { id: booking.id });
-                                }
+                                // Navigate to booking detail
+                                navigation.navigate('Detail', { 
+                                    id: booking.id, 
+                                    title: booking.title,
+                                    type: booking.type || 'service'
+                                });
                             }}
                         />
                     )) : (
@@ -232,7 +235,12 @@ export default function HomeScreen({ navigation }) {
                                 style={styles.serviceCard}
                                 onPress={() => {
                                     haptic.light();
-                                    navigation.navigate('ServiceDetail', { id: service.id, title: service.title, type: 'service' });
+                                    navigation.navigate('Detail', { 
+                                        id: service.id, 
+                                        title: service.title, 
+                                        type: 'service',
+                                        price: service.price
+                                    });
                                 }}
                             >
                                 <Image source={{ uri: service.image_url }} style={styles.serviceImage} />

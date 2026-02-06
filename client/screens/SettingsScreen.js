@@ -47,6 +47,24 @@ function SettingsItem({ icon, title, subtitle, onPress, isSwitch, switchValue, o
 export default function SettingsScreen({ navigation }) {
     const { signOut, user } = useContext(AuthContext);
     const [notifications, setNotifications] = useState(true);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        // Fetch user notification preferences
+        const fetchPreferences = async () => {
+            try {
+                const response = await api.get('/auth/profile');
+                if (response.data && response.data.data) {
+                    setNotifications(response.data.data.notificationsEnabled !== false);
+                }
+            } catch (error) {
+                console.log('Error fetching preferences:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchPreferences();
+    }, []);
 
     const handleLogout = () => {
         haptic.medium();

@@ -60,26 +60,52 @@ exports.initiateBooking = async (req, res) => {
         if (tier === 'basic') subscriptionDiscount = 10;
         if (tier === 'premium') subscriptionDiscount = 20;
 
+        // 4. Validate and Apply Coupon Code
         let couponDiscount = 0;
-        if (couponCode === 'PETS20') {
-            couponDiscount = 20;
-        } else {
-            // Apply Random "Demo" Discount (10% - 30%) for ANY other code (or no code)
-            couponDiscount = Math.floor(Math.random() * (30 - 10 + 1)) + 10;
+        let validCoupon = null;
+        
+        if (couponCode) {
+            const [coupons] = await pool.execute(
+                `SELECT * FROM coupons 
+                 WHERE code = ? 
+                 AND valid_from <= NOW() 
+                 AND valid_until >= NOW()
+                 AND (usage_limit = 0 OR used_count < usage_limit)
+                 AND (applicable_types = 'all' OR applicable_types = ?)`,
+                [couponCode.toUpperCase(), itemType]
+            );
+
+            if (coupons.length > 0) {
+                validCoupon = coupons[0];
+                couponDiscount = Number(validCoupon.discount_percentage);
+            } else {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: 'Invalid or expired promo code' 
+                });
+            }
         }
 
         let priceAfterProvider = originalPrice * (1 - providerDiscount / 100);
         let maxAdditionalDiscount = Math.max(subscriptionDiscount, couponDiscount);
         let finalPrice = priceAfterProvider * (1 - maxAdditionalDiscount / 100);
 
-        // 4. Create Booking Record with date
+        // 5. Create Booking Record with date
         const bookingDateValue = bookingDate || new Date().toISOString().slice(0, 19).replace('T', ' ');
 
         const [result] = await pool.execute(
             `INSERT INTO bookings (user_id, item_id, item_type, original_price, provider_discount, coupon_code, coupon_discount, subscription_discount, final_price, status, booking_date) 
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_payment', ?)`,
-            [userId, itemId, itemType, originalPrice, providerDiscount, couponCode || '', couponDiscount, subscriptionDiscount, finalPrice, bookingDateValue]
+            [userId, itemId, itemType, originalPrice, providerDiscount, couponCode ? couponCode.toUpperCase() : '', couponDiscount, subscriptionDiscount, finalPrice, bookingDateValue]
         );
+
+        // 6. Update coupon usage count if applicable
+        if (validCoupon) {
+            await pool.execute(
+                'UPDATE coupons SET used_count = used_count + 1 WHERE id = ?',
+                [validCoupon.id]
+            );
+        }
 
         res.json({
             success: true,

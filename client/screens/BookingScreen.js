@@ -1,151 +1,238 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Alert, KeyboardAvoidingView, Platform, Animated } from 'react-native';
-import { Title, Card, Text, Paragraph, ActivityIndicator } from 'react-native-paper';
+import { View, StyleSheet, ScrollView, Alert, KeyboardAvoidingView, Platform, Animated, TouchableOpacity } from 'react-native';
+import { Title, Text, ActivityIndicator } from 'react-native-paper';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import api from '../services/api';
 import PremiumButton from '../components/PremiumButton';
-import PremiumInput from '../components/PremiumInput';
 import { haptic } from '../utils/haptics';
+import { colors, layout, shadows } from '../theme';
+import { TextInput } from 'react-native-paper'; // Using Paper input for cleaner look in this specific section
 
-function FadeInView({ children, delay = 0, direction = 'down', style }) {
+function FadeInView({ children, delay = 0, style }) {
     const fadeAnim = useRef(new Animated.Value(0)).current;
-    const translateAnim = useRef(new Animated.Value(direction === 'up' ? -30 : 30)).current;
     useEffect(() => {
-        Animated.parallel([
-            Animated.timing(fadeAnim, { toValue: 1, duration: 400, delay, useNativeDriver: true }),
-            Animated.timing(translateAnim, { toValue: 0, duration: 400, delay, useNativeDriver: true }),
-        ]).start();
+        Animated.timing(fadeAnim, { toValue: 1, duration: 600, delay, useNativeDriver: true }).start();
     }, []);
-    return <Animated.View style={[{ opacity: fadeAnim, transform: [{ translateY: translateAnim }] }, style]}>{children}</Animated.View>;
+    return <Animated.View style={[{ opacity: fadeAnim }, style]}>{children}</Animated.View>;
 }
 
 export default function BookingScreen({ route, navigation }) {
     const { id, title, type, price } = route.params;
-    const [coupon, setCoupon] = useState(''); // Optional now
-    const [loading, setLoading] = useState(false);
+    const [coupon, setCoupon] = useState('');
+    const [loading, setLoading] = useState(true); // Initial load is true for auto-calc
+    const [calcLoading, setCalcLoading] = useState(false); // For manual coupon apply
     const [bookingDetails, setBookingDetails] = useState(null);
-
-    // Auto-Calculate on mount (optional) or just simplify button
-    // User wants "Proceed with payment gateway" so we combine steps visually
-
+    const [availableCoupons, setAvailableCoupons] = useState([]);
+    const [showCoupons, setShowCoupons] = useState(false);
     const { signOut } = React.useContext(require('../context/AuthContext').AuthContext);
 
-    const initiateBooking = async () => {
-        haptic.medium();
-        setLoading(true);
+    useEffect(() => {
+        calculatePrice('');
+        fetchAvailableCoupons();
+    }, []);
+
+    const fetchAvailableCoupons = async () => {
         try {
-            // Send empty coupon to trigger random discount
-            const response = await api.post('/bookings/initiate', { itemId: id, itemType: type || 'event', couponCode: coupon });
-            setBookingDetails(response.data.data);
-            haptic.success();
-            // Don't alert, just show breakdown smoothly
-        } catch (error) {
-            haptic.error();
-            if (error.response?.status === 403 || error.response?.status === 401) {
-                // Explain why login is required instead of forcing it immediately
-                Alert.alert(
-                    "Login Required",
-                    "You need to be logged in to calculate pricing and book services.",
-                    [
-                        { text: "Cancel", style: "cancel" },
-                        { text: "Log In", onPress: () => signOut() }
-                    ]
+            const response = await api.get('/coupons');
+            if (response.data.success) {
+                const filtered = response.data.data.filter(
+                    c => c.applicable_types === 'all' || c.applicable_types === type
                 );
-            } else {
-                Alert.alert("Error", error.response?.data?.message || "Failed to calculate price");
+                setAvailableCoupons(filtered);
             }
-        } finally { setLoading(false); }
+        } catch (error) {
+            // Silently fail - coupons are optional
+            setAvailableCoupons([]);
+        }
+    };
+
+    const calculatePrice = async (code = '') => {
+        if (code) setCalcLoading(true);
+
+        try {
+            const response = await api.post('/bookings/initiate', {
+                itemId: id,
+                itemType: type || 'event',
+                couponCode: code
+            });
+            setBookingDetails(response.data.data);
+            if (code) haptic.success();
+        } catch (error) {
+            console.log('Booking calculation error:', error);
+            
+            // If there's an error (including auth errors), use fallback pricing
+            if (code) {
+                haptic.error();
+                Alert.alert("Invalid Coupon", "That code didn't work. Try another?");
+                setCoupon('');
+            }
+            
+            // Set fallback booking details with base price
+            setBookingDetails({
+                bookingId: null,
+                originalPrice: price,
+                discounts: {
+                    provider: 0,
+                    subscription: 0,
+                    coupon: 0
+                },
+                finalPrice: price
+            });
+        } finally {
+            setLoading(false);
+            setCalcLoading(false);
+        }
     };
 
     const confirmPayment = () => {
         haptic.light();
-        if (!bookingDetails || !bookingDetails.bookingId) return;
+
+        // Fallback to base price if API failed (Guest/Demo Mode)
+        const finalAmount = bookingDetails?.finalPrice || price;
+        const currentBookingId = bookingDetails?.bookingId || null;
 
         navigation.navigate('PaymentGateway', {
-            amount: bookingDetails.finalPrice,
-            bookingId: bookingDetails.bookingId,
-            onSuccess: async (paymentIntentId) => {
-                try {
-                    const response = await api.put(`/bookings/${bookingDetails.bookingId}/confirm`, { paymentIntentId });
-                    const { rewardPromoCode, rewardPromoDiscount } = response.data;
-                    
-                    // Show reward promo code alert
-                    if (rewardPromoCode) {
-                        Alert.alert(
-                            '🎉 Booking Confirmed!',
-                            `Thank you for your purchase!\n\nHere's your reward promo code for your next booking:\n\n🎟️ ${rewardPromoCode}\n\nUse this code to get ${rewardPromoDiscount}% off your next service!`,
-                            [{ text: 'Awesome!', onPress: () => navigation.navigate('Main', { screen: 'Schedule' }) }]
-                        );
-                    } else {
-                        navigation.navigate('Main', { screen: 'Schedule' });
-                    }
-                } catch (error) {
-                    Alert.alert('Error', 'Failed to confirm booking');
-                }
-            }
+            amount: finalAmount,
+            bookingId: currentBookingId
         });
     };
 
+    const renderBreakdownItem = (label, value, isDiscount = false, isTotal = false) => (
+        <View style={[styles.row, isTotal && styles.totalRow]}>
+            <Text style={[styles.label, isTotal && styles.totalLabel, isDiscount && styles.discountLabel]}>{label}</Text>
+            <Text style={[styles.value, isTotal && styles.totalValue, isDiscount && styles.discountValue]}>{value}</Text>
+        </View>
+    );
+
     return (
         <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-            <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-                <FadeInView>
-                    <LinearGradient colors={['#6C63FF', '#4834d4']} style={styles.summaryCard}>
-                        <View style={styles.itemBadge}><Text style={styles.itemBadgeText}>{type === 'service' ? '🛠️ Service' : '📅 Event'}</Text></View>
-                        <Title style={styles.itemTitle}>{title}</Title>
-                        <View style={styles.basePriceRow}><Text style={styles.basePriceLabel}>Base Price</Text><Text style={styles.basePriceValue}>${price}</Text></View>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+
+                {/* Hero Header */}
+                <FadeInView style={styles.headerContainer}>
+                    <LinearGradient
+                        colors={[colors.gradient.start, colors.gradient.end]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.heroCard}
+                    >
+                        <View style={styles.iconCircle}>
+                            <Ionicons name={type === 'service' ? 'paw' : 'calendar'} size={32} color={colors.primary} />
+                        </View>
+                        <Text style={styles.heroTitle}>{title}</Text>
+                        <View style={styles.priceTag}>
+                            <Text style={styles.priceTagText}>${price}</Text>
+                        </View>
                     </LinearGradient>
                 </FadeInView>
 
-                {/* Dynamic Promo Section */}
-                {!bookingDetails && (
-                    <FadeInView delay={100} style={styles.section}>
-                        <Text style={styles.sectionTitle}>🎟️ Have a Promo Code?</Text>
-                        <PremiumInput
-                            label="Promo Code"
-                            value={coupon}
-                            onChangeText={setCoupon}
-                            placeholder="Enter code here"
-                            autoCapitalize="characters"
-                            icon="pricetag-outline"
-                        />
-                        <PremiumButton
-                            title={loading ? "Calculating..." : "Apply & Calculate"}
-                            onPress={initiateBooking}
-                            loading={loading}
-                            colors={['#4CAF50', '#2E7D32']}
-                        />
-                    </FadeInView>
-                )}
+                {/* Calculation Loading State */}
+                {loading ? (
+                    <View style={styles.centerLoading}>
+                        <ActivityIndicator size="large" color={colors.primary} />
+                        <Text style={{ marginTop: 15, color: colors.textLight, fontFamily: 'Outfit_500Medium' }}>Fetching best prices...</Text>
+                    </View>
+                ) : (
+                    <FadeInView delay={200} style={styles.detailsContainer}>
+                        {/* Price Breakdown */}
+                        {bookingDetails && (
+                            <View style={styles.section}>
+                                <Text style={styles.sectionHeader}>Billing Details</Text>
+                                <View style={styles.card}>
+                                    {renderBreakdownItem('Original Price', `$${bookingDetails.originalPrice}`)}
 
-                {bookingDetails && (
-                    <FadeInView direction="up" style={styles.section}>
-                        <Text style={styles.sectionTitle}>📊 Final Price</Text>
-                        <View style={styles.breakdownCard}>
-                            <View style={styles.breakdownRow}><Text style={styles.breakdownLabel}>Original Price</Text><Text style={styles.breakdownValue}>${bookingDetails.originalPrice}</Text></View>
+                                    {bookingDetails.discounts.subscription > 0 &&
+                                        renderBreakdownItem('Membership Savings', `-${bookingDetails.discounts.subscription}%`, true)
+                                    }
 
-                            {(bookingDetails.discounts.subscription > 0 || bookingDetails.discounts.coupon > 0) && (
-                                <View style={styles.breakdownRow}>
-                                    <View style={styles.discountLabel}>
-                                        <Text style={styles.breakdownLabel}>Woohoo! Discount Applied</Text>
-                                        <View style={styles.discountBadge}><Text style={styles.discountBadgeText}>{Math.max(bookingDetails.discounts.subscription, bookingDetails.discounts.coupon)}% OFF</Text></View>
-                                    </View>
-                                    <Text style={styles.discountValue}>-${(bookingDetails.originalPrice * Math.max(bookingDetails.discounts.subscription, bookingDetails.discounts.coupon) / 100).toFixed(2)}</Text>
+                                    {bookingDetails.discounts.coupon > 0 &&
+                                        renderBreakdownItem('Promo Code Applied', `-${bookingDetails.discounts.coupon}%`, true)
+                                    }
+
+                                    <View style={styles.divider} />
+                                    {renderBreakdownItem('Total to Pay', `$${bookingDetails.finalPrice}`, false, true)}
+                                </View>
+                            </View>
+                        )}
+
+                        {/* Promo Code Input */}
+                        <View style={styles.section}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                <Text style={styles.sectionHeader}>Promo Code</Text>
+                                {availableCoupons.length > 0 && (
+                                    <TouchableOpacity onPress={() => { haptic.light(); setShowCoupons(!showCoupons); }}>
+                                        <Text style={{ color: colors.primary, fontFamily: 'Outfit_600SemiBold', fontSize: 14 }}>
+                                            {showCoupons ? 'Hide' : 'View'} Codes
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+
+                            {showCoupons && availableCoupons.length > 0 && (
+                                <View style={styles.couponsList}>
+                                    <Text style={styles.couponsTitle}>🎉 Available Discounts:</Text>
+                                    {availableCoupons.map((c, idx) => (
+                                        <TouchableOpacity 
+                                            key={idx} 
+                                            style={styles.couponChip}
+                                            onPress={() => {
+                                                haptic.light();
+                                                setCoupon(c.code);
+                                                setShowCoupons(false);
+                                            }}
+                                        >
+                                            <View style={styles.couponChipLeft}>
+                                                <Text style={styles.couponCode}>{c.code}</Text>
+                                                <Text style={styles.couponDesc}>{c.discount_percentage}% OFF</Text>
+                                            </View>
+                                            <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+                                        </TouchableOpacity>
+                                    ))}
                                 </View>
                             )}
 
-                            <View style={styles.divider} />
-                            <View style={styles.totalRow}><Text style={styles.totalLabel}>Total to Pay</Text><Text style={styles.totalValue}>${bookingDetails.finalPrice}</Text></View>
+                            <View style={styles.promoContainer}>
+                                <TextInput
+                                    style={styles.promoInput}
+                                    placeholder="Enter code (optional)"
+                                    value={coupon}
+                                    onChangeText={setCoupon}
+                                    autoCapitalize="characters"
+                                    mode="outlined"
+                                    outlineColor="transparent"
+                                    activeOutlineColor="transparent"
+                                    placeholderTextColor={colors.textLight}
+                                    theme={{ colors: { background: '#F0F3F5' } }}
+                                />
+                                <TouchableOpacity
+                                    style={[styles.applyBtn, (!coupon || calcLoading) && styles.applyBtnDisabled]}
+                                    onPress={() => calculatePrice(coupon)}
+                                    disabled={!coupon || calcLoading}
+                                >
+                                    {calcLoading ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.applyBtnText}>Apply</Text>}
+                                </TouchableOpacity>
+                            </View>
                         </View>
                     </FadeInView>
                 )}
+
             </ScrollView>
 
-            <FadeInView delay={200} direction="up" style={styles.bottomBar}>
-                {bookingDetails ? (
-                    <PremiumButton title={`Pay Now $${bookingDetails.finalPrice} 💳`} onPress={confirmPayment} />
+            {/* Bottom Action Bar - Always Visible */}
+            <FadeInView delay={400} style={styles.bottomBar}>
+                {loading ? (
+                    <PremiumButton
+                        title="Preparing Payment..."
+                        disabled={true}
+                        style={{ backgroundColor: '#ccc' }}
+                    />
                 ) : (
-                    <View style={{ alignItems: 'center' }}><Text style={{ color: '#aaa' }}>Calculute price to proceed</Text></View>
+                    <PremiumButton
+                        title={`Pay $${bookingDetails?.finalPrice || price} Securely`}
+                        onPress={confirmPayment}
+                        icon="lock-closed"
+                    />
                 )}
             </FadeInView>
         </KeyboardAvoidingView>
@@ -154,29 +241,105 @@ export default function BookingScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#F8F9FD' },
-    scrollView: { flex: 1 },
-    scrollContent: { padding: 20, paddingBottom: 120 },
-    summaryCard: { borderRadius: 20, padding: 20, marginBottom: 20 },
-    itemBadge: { alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 15, marginBottom: 10 },
-    itemBadgeText: { color: '#fff', fontWeight: '600', fontSize: 12 },
-    itemTitle: { color: '#fff', fontSize: 22, fontWeight: 'bold', marginBottom: 15 },
-    basePriceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.15)', padding: 12, borderRadius: 12 },
-    basePriceLabel: { color: 'rgba(255,255,255,0.9)', fontSize: 14 },
-    basePriceValue: { color: '#fff', fontSize: 24, fontWeight: 'bold' },
-    section: { marginBottom: 20 },
-    sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#2D3436', marginBottom: 10 },
-    promoHint: { fontSize: 14, color: '#666', marginBottom: 15 },
-    breakdownCard: { backgroundColor: '#fff', borderRadius: 16, padding: 20, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 5 },
-    breakdownRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-    breakdownLabel: { color: '#636e72', fontSize: 14 },
-    breakdownValue: { color: '#2D3436', fontSize: 16, fontWeight: '600' },
-    discountLabel: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    discountBadge: { backgroundColor: '#FF980015', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
-    discountBadgeText: { color: '#F57C00', fontSize: 11, fontWeight: 'bold' },
-    discountValue: { color: '#4CAF50', fontSize: 16, fontWeight: '600' },
-    divider: { height: 1, backgroundColor: '#E0E0E0', marginVertical: 15 },
-    totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    totalLabel: { fontSize: 18, fontWeight: 'bold', color: '#2D3436' },
-    totalValue: { fontSize: 28, fontWeight: 'bold', color: '#6C63FF' },
-    bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#fff', padding: 20, paddingBottom: 30, borderTopLeftRadius: 25, borderTopRightRadius: 25, elevation: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -5 }, shadowOpacity: 0.1, shadowRadius: 10 },
+    scrollContent: { paddingBottom: 120 },
+    headerContainer: { padding: 20, paddingTop: 10 },
+    heroCard: {
+        borderRadius: 24,
+        padding: 25,
+        alignItems: 'center',
+        ...shadows.medium,
+    },
+    iconCircle: {
+        width: 60, height: 60, borderRadius: 30, backgroundColor: '#fff',
+        justifyContent: 'center', alignItems: 'center', marginBottom: 15,
+        elevation: 5, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 5
+    },
+    heroTitle: {
+        fontSize: 24, fontFamily: 'Outfit_700Bold', color: '#fff', textAlign: 'center', marginBottom: 10
+    },
+    priceTag: {
+        backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 15, paddingVertical: 5, borderRadius: 20
+    },
+    priceTagText: { fontSize: 18, color: '#fff', fontFamily: 'Outfit_600SemiBold' },
+
+    centerLoading: { flex: 1, justifyContent: 'center', alignItems: 'center', marginTop: 50 },
+
+    detailsContainer: { paddingHorizontal: 20 },
+    section: { marginBottom: 25 },
+    sectionHeader: {
+        fontSize: 16, fontFamily: 'Outfit_600SemiBold', color: colors.textSecondary, marginBottom: 10, marginLeft: 5
+    },
+    card: {
+        backgroundColor: '#fff', borderRadius: 20, padding: 20, ...shadows.small
+    },
+
+    row: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
+    label: { fontSize: 15, color: colors.textSecondary, fontFamily: 'Outfit_400Regular' },
+    value: { fontSize: 16, color: colors.text, fontFamily: 'Outfit_600SemiBold' },
+
+    discountLabel: { color: colors.primary },
+    discountValue: { color: colors.primary },
+
+    divider: { height: 1, backgroundColor: colors.border, marginVertical: 10 },
+
+    totalRow: { marginTop: 5, alignItems: 'center' },
+    totalLabel: { fontSize: 18, fontFamily: 'Outfit_700Bold', color: colors.text },
+    totalValue: { fontSize: 24, fontFamily: 'Outfit_700Bold', color: colors.primaryDark },
+
+    promoContainer: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    promoInput: { flex: 1, backgroundColor: '#fff', borderRadius: 12, height: 50, fontSize: 16 },
+    applyBtn: {
+        backgroundColor: colors.text, height: 50, paddingHorizontal: 20,
+        justifyContent: 'center', alignItems: 'center', borderRadius: 12, ...shadows.small
+    },
+    applyBtnDisabled: { backgroundColor: '#CED6E0', elevation: 0 },
+    applyBtnText: { color: '#fff', fontFamily: 'Outfit_600SemiBold' },
+
+    couponsList: {
+        backgroundColor: '#F0F9FF',
+        borderRadius: 16,
+        padding: 16,
+        marginBottom: 15,
+        borderWidth: 1,
+        borderColor: '#E0F2FE'
+    },
+    couponsTitle: {
+        fontSize: 14,
+        fontFamily: 'Outfit_600SemiBold',
+        color: colors.text,
+        marginBottom: 12
+    },
+    couponChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: colors.primary + '30',
+        ...shadows.small
+    },
+    couponChipLeft: {
+        flex: 1
+    },
+    couponCode: {
+        fontSize: 15,
+        fontFamily: 'Outfit_700Bold',
+        color: colors.primary,
+        marginBottom: 2
+    },
+    couponDesc: {
+        fontSize: 13,
+        fontFamily: 'Outfit_500Medium',
+        color: colors.textSecondary
+    },
+
+    bottomBar: {
+        position: 'absolute', bottom: 0, left: 0, right: 0,
+        backgroundColor: '#fff', padding: 20, paddingBottom: 30,
+        borderTopLeftRadius: 30, borderTopRightRadius: 30,
+        ...shadows.large
+    }
 });

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useContext } from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity, Animated, RefreshControl } from 'react-native';
-import { Text } from 'react-native-paper';
+import { Text, ActivityIndicator } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme';
 import { haptic } from '../utils/haptics';
@@ -59,36 +59,50 @@ export default function MessagesScreen({ navigation }) {
 
     const fetchMessages = async () => {
         try {
-            // In a real app, you would fetch messages from an API
-            // For now, we'll generate messages based on bookings
-            const response = await api.get('/bookings/user').catch(() => ({ data: { data: [] } }));
-            const bookings = response.data.data || [];
+            // Fetch all messages from the API
+            const messagesRes = await api.get('/messages').catch(() => ({ data: { data: [] } }));
+            const allMessages = messagesRes.data.data || [];
 
-            // Generate messages from bookings
-            const generatedMessages = bookings.slice(0, 5).map((booking, index) => ({
-                id: booking.id,
-                name: booking.provider || `Provider ${index + 1}`,
-                preview: `Booking on ${new Date(booking.booking_date).toLocaleDateString()}`,
-                type: booking.item_type === 'service' ? 'walker' : 'vet',
-                unread: index === 0 ? 1 : 0,
-            }));
+            // Group messages by booking_id to create conversations
+            const conversationsMap = new Map();
+            
+            allMessages.forEach(msg => {
+                const bookingId = msg.booking_id || 'general';
+                if (!conversationsMap.has(bookingId)) {
+                    conversationsMap.set(bookingId, []);
+                }
+                conversationsMap.get(bookingId).push(msg);
+            });
 
-            // If no bookings, show sample messages
-            if (generatedMessages.length === 0) {
+            // Convert to conversation list with last message preview
+            const conversations = Array.from(conversationsMap.entries()).map(([bookingId, msgs]) => {
+                const sortedMsgs = msgs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                const lastMsg = sortedMsgs[0];
+                const unreadCount = msgs.filter(m => !m.read && m.sender_type === 'provider').length;
+                
+                return {
+                    id: bookingId,
+                    name: lastMsg.sender_type === 'provider' ? 'Service Provider' : 'You',
+                    preview: lastMsg.message_text,
+                    type: 'walker',
+                    unread: unreadCount,
+                    bookingId: bookingId,
+                    lastMessageTime: new Date(lastMsg.created_at)
+                };
+            }).sort((a, b) => b.lastMessageTime - a.lastMessageTime);
+
+            // If no messages, show sample
+            if (conversations.length === 0) {
                 setMessages([
-                    { id: 1, name: 'Tom (Dog Walker)', preview: 'See you tomorrow! 😊', type: 'walker', unread: 0 },
-                    { id: 2, name: 'Emily (Groomer)', preview: 'Your appointment is confirmed', type: 'walker', unread: 1 },
-                    { id: 3, name: 'Dr. Chen (Vet Clinic)', preview: 'Reminder: Friday at 2 PM', type: 'vet', unread: 0 },
-                    { id: 4, name: 'Sarah (Pet Sitter)', preview: 'Available this weekend!', type: 'sitter', unread: 0 },
+                    { id: 1, name: 'Zumi Support', preview: 'Welcome to Zumi! How can we help you today?', type: 'walker', unread: 0 },
                 ]);
             } else {
-                setMessages(generatedMessages);
+                setMessages(conversations);
             }
         } catch (error) {
             console.log('Error fetching messages:', error);
             setMessages([
-                { id: 1, name: 'Tom (Dog Walker)', preview: 'See you tomorrow! 😊', type: 'walker', unread: 0 },
-                { id: 2, name: 'Dr. Chen (Vet Clinic)', preview: 'Reminder: Friday at 2 PM', type: 'vet', unread: 0 },
+                { id: 1, name: 'Zumi Support', preview: 'Welcome to Zumi! Book a service to chat with providers.', type: 'walker', unread: 0 },
             ]);
         } finally {
             setLoading(false);
@@ -120,7 +134,11 @@ export default function MessagesScreen({ navigation }) {
                 contentContainerStyle={styles.messagesListContent}
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />}
             >
-                {messages.length > 0 ? (
+                {loading ? (
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="large" color={colors.primary} />
+                    </View>
+                ) : messages.length > 0 ? (
                     messages.map((message, index) => (
                         <MessageCard
                             key={message.id}
@@ -147,6 +165,7 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
 
     logoContainer: { alignItems: 'center', paddingTop: 20, paddingBottom: 10 },
+    loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 100 },
 
     pageTitle: { fontSize: 22, fontWeight: '700', color: colors.primary, textAlign: 'center', marginVertical: 15 },
 

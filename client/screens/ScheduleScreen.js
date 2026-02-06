@@ -177,7 +177,14 @@ export default function ScheduleScreen({ navigation }) {
                             item={item}
                             index={index}
                             onPress={() => {
-                                // Navigate to booking details
+                                haptic.light();
+                                // Navigate to Detail screen to view/manage booking
+                                navigation.navigate('Detail', { 
+                                    id: item.id, 
+                                    title: item.title,
+                                    type: item.type || 'service',
+                                    bookingId: item.id
+                                });
                             }}
                         />
                     ))
